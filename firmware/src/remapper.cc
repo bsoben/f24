@@ -703,6 +703,65 @@ void set_mapping_from_config() {
     update_their_descriptor_derivates();
 }
 
+// While any non-modifier key is down, also report F24, so software on the computer
+// can recognize "F24 + key" as a hotkey. The keyboard report is a bitmap, so the host
+// can't tell which key came first; to let F24 act as a prefix key, the first report of
+// a keypress has F24 (and modifiers) only and the key itself follows in the next one.
+static void add_f24_to_keypresses() {
+    static const uint32_t KEY_A_USAGE = 0x00070004;  // first key bit; the bits up to F23 are contiguous
+    static const uint32_t KEY_F23_USAGE = 0x00070072;
+    static const uint32_t KEY_F24_USAGE = 0x00070073;
+    static const uint32_t KEY_INTL_FIRST_USAGE = 0x00070087;  // second key range, up to 0x8B
+    static const uint32_t KEY_INTL_LAST_USAGE = 0x0007008B;
+    static bool f24_reported = false;
+
+    auto f24 = our_usages_flat.find(KEY_F24_USAGE);
+    auto first_key = our_usages_flat.find(KEY_A_USAGE);
+    auto first_intl_key = our_usages_flat.find(KEY_INTL_FIRST_USAGE);
+    if ((f24 == our_usages_flat.end()) || (first_key == our_usages_flat.end())) {
+        return;
+    }
+
+    uint8_t report_id = f24->second.report_id;
+    uint8_t* report = reports[report_id];
+    uint16_t len = report_sizes[report_id];
+
+    bool any_key = false;
+    for (uint32_t usage = KEY_A_USAGE; usage <= KEY_F23_USAGE; usage++) {
+        if (get_bits(report, len, first_key->second.bitpos + (usage - KEY_A_USAGE), 1)) {
+            any_key = true;
+            break;
+        }
+    }
+    if (!any_key && (first_intl_key != our_usages_flat.end())) {
+        for (uint32_t usage = KEY_INTL_FIRST_USAGE; usage <= KEY_INTL_LAST_USAGE; usage++) {
+            if (get_bits(report, len, first_intl_key->second.bitpos + (usage - KEY_INTL_FIRST_USAGE), 1)) {
+                any_key = true;
+                break;
+            }
+        }
+    }
+
+    if (!any_key) {
+        f24_reported = false;
+        return;
+    }
+
+    if (!f24_reported) {
+        // hold the keys back for this report
+        for (uint32_t usage = KEY_A_USAGE; usage <= KEY_F23_USAGE; usage++) {
+            put_bits(report, len, first_key->second.bitpos + (usage - KEY_A_USAGE), 1, 0);
+        }
+        if (first_intl_key != our_usages_flat.end()) {
+            for (uint32_t usage = KEY_INTL_FIRST_USAGE; usage <= KEY_INTL_LAST_USAGE; usage++) {
+                put_bits(report, len, first_intl_key->second.bitpos + (usage - KEY_INTL_FIRST_USAGE), 1, 0);
+            }
+        }
+        f24_reported = true;
+    }
+    put_bits(report, len, f24->second.bitpos, 1, 1);
+}
+
 bool differ_on_absolute(const uint8_t* report1, const uint8_t* report2, uint8_t report_id) {
     uint8_t* absolute = report_masks_absolute[report_id];
 
@@ -1390,6 +1449,8 @@ void process_mapping(bool auto_repeat) {
             put_bits((uint8_t*) reports[our_usage.report_id], report_sizes[our_usage.report_id], our_usage.bitpos, our_usage.size, existing_val + truncated);
         }
     }
+
+    add_f24_to_keypresses();
 
     for (unsigned int i = 0; i < report_ids.size(); i++) {  // XXX what order should we go in? maybe keyboard first so that mappings to ctrl-left click work as expected?
         uint8_t report_id = report_ids[i];

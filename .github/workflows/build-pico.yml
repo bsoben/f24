@@ -1,0 +1,30 @@
+name: build-pico
+on:
+  workflow_dispatch:
+  push:
+    branches:
+      - f24-keypress
+defaults:
+  run:
+    shell: bash --noprofile --norc -x -e -o pipefail {0}
+jobs:
+  build:
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          submodules: true
+      - name: Install compiler, libraries and tools
+        run: |
+          sudo apt update
+          sudo apt install -y --no-install-recommends gcc-arm-none-eabi libnewlib-arm-none-eabi libstdc++-arm-none-eabi-newlib srecord
+      - name: Build
+        run: |
+          mkdir build
+          cd build
+          cmake ../firmware
+          make remapper
+      - uses: actions/upload-artifact@v7
+        with:
+          name: remapper-pico
+          path: build/remapper.uf2
