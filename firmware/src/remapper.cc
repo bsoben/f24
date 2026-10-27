@@ -703,17 +703,31 @@ void set_mapping_from_config() {
     update_their_descriptor_derivates();
 }
 
-// While any non-modifier key is down, also report F24, so software on the computer
-// can recognize "F24 + key" as a hotkey. The keyboard report is a bitmap, so the host
-// can't tell which key came first; to let F24 act as a prefix key, the first report of
-// a keypress has F24 (and modifiers) only and the key itself follows in the next one.
+// While F24 mode is on and any non-modifier key is down, also report F24, so software
+// on the computer can recognize "F24 + key" as a hotkey. The keyboard report is a bitmap,
+// so the host can't tell which key came first; to let F24 act as a prefix key, the first
+// report of a keypress has F24 (and modifiers) only and the key itself follows in the next one.
+//
+// F24 mode is switched on and off by double-tapping Ctrl (left or right). A tap is a
+// press and release of Ctrl with no other key or modifier involved.
 static void add_f24_to_keypresses() {
+    static const bool F24_MODE_AT_STARTUP = false;
+    static const uint64_t CTRL_TAP_MAX_US = 300000;     // longest press that still counts as a tap
+    static const uint64_t CTRL_DOUBLE_TAP_US = 400000;  // longest gap between the two taps
+    static const uint32_t KEY_LEFT_CTRL_USAGE = 0x000700E0;  // modifier bits E0..E7 are contiguous
+    static const uint8_t LEFT_CTRL_BIT = 0;
+    static const uint8_t RIGHT_CTRL_BIT = 4;
     static const uint32_t KEY_A_USAGE = 0x00070004;  // first key bit; the bits up to F23 are contiguous
     static const uint32_t KEY_F23_USAGE = 0x00070072;
     static const uint32_t KEY_F24_USAGE = 0x00070073;
     static const uint32_t KEY_INTL_FIRST_USAGE = 0x00070087;  // second key range, up to 0x8B
     static const uint32_t KEY_INTL_LAST_USAGE = 0x0007008B;
     static bool f24_reported = false;
+    static bool f24_mode = F24_MODE_AT_STARTUP;
+    static bool ctrl_was_down = false;
+    static bool ctrl_dirty = false;  // something else was pressed along with this Ctrl press
+    static uint64_t ctrl_pressed_at = 0;
+    static uint64_t last_tap_at = 0;  // 0: no tap pending
 
     auto f24 = our_usages_flat.find(KEY_F24_USAGE);
     auto first_key = our_usages_flat.find(KEY_A_USAGE);
@@ -742,7 +756,43 @@ static void add_f24_to_keypresses() {
         }
     }
 
-    if (!any_key) {
+    auto first_mod = our_usages_flat.find(KEY_LEFT_CTRL_USAGE);
+    if (first_mod != our_usages_flat.end()) {
+        uint16_t mod_bitpos = first_mod->second.bitpos;
+        bool ctrl_down = get_bits(report, len, mod_bitpos + LEFT_CTRL_BIT, 1) || get_bits(report, len, mod_bitpos + RIGHT_CTRL_BIT, 1);
+        bool other_modifier = false;
+        for (uint8_t bit = 0; bit < 8; bit++) {
+            if ((bit != LEFT_CTRL_BIT) && (bit != RIGHT_CTRL_BIT) && get_bits(report, len, mod_bitpos + bit, 1)) {
+                other_modifier = true;
+            }
+        }
+        bool something_else = any_key || other_modifier;
+        uint64_t now = get_time();
+
+        if (something_else) {
+            ctrl_dirty = true;
+            last_tap_at = 0;  // any other key between taps cancels a pending double-tap
+        }
+        if (ctrl_down && !ctrl_was_down) {
+            ctrl_pressed_at = now;
+            ctrl_dirty = something_else;
+        }
+        if (!ctrl_down && ctrl_was_down) {
+            if (!ctrl_dirty && (now - ctrl_pressed_at < CTRL_TAP_MAX_US)) {
+                if ((last_tap_at != 0) && (now - last_tap_at < CTRL_DOUBLE_TAP_US)) {
+                    f24_mode = !f24_mode;
+                    last_tap_at = 0;
+                } else {
+                    last_tap_at = now;
+                }
+            } else {
+                last_tap_at = 0;
+            }
+        }
+        ctrl_was_down = ctrl_down;
+    }
+
+    if (!f24_mode || !any_key) {
         f24_reported = false;
         return;
     }
