@@ -709,7 +709,8 @@ void set_mapping_from_config() {
 // report of a keypress has F24 (and modifiers) only and the key itself follows in the next one.
 //
 // F24 mode is switched on and off by double-tapping Ctrl (left or right). A tap is a
-// press and release of Ctrl with no other key or modifier involved.
+// press and release of Ctrl with no other key or modifier involved. Each toggle is announced
+// to the computer by briefly pressing F23 (mode switched on) or F22 (mode switched off).
 static void add_f24_to_keypresses() {
     static const bool F24_MODE_AT_STARTUP = false;
     static const uint64_t CTRL_TAP_MAX_US = 300000;     // longest press that still counts as a tap
@@ -718,8 +719,10 @@ static void add_f24_to_keypresses() {
     static const uint8_t LEFT_CTRL_BIT = 0;
     static const uint8_t RIGHT_CTRL_BIT = 4;
     static const uint32_t KEY_A_USAGE = 0x00070004;  // first key bit; the bits up to F23 are contiguous
+    static const uint32_t KEY_F22_USAGE = 0x00070071;
     static const uint32_t KEY_F23_USAGE = 0x00070072;
     static const uint32_t KEY_F24_USAGE = 0x00070073;
+    static const uint64_t TOGGLE_PULSE_US = 50000;  // how long F23/F22 is held to announce a toggle
     static const uint32_t KEY_INTL_FIRST_USAGE = 0x00070087;  // second key range, up to 0x8B
     static const uint32_t KEY_INTL_LAST_USAGE = 0x0007008B;
     static bool f24_reported = false;
@@ -728,6 +731,8 @@ static void add_f24_to_keypresses() {
     static bool ctrl_dirty = false;  // something else was pressed along with this Ctrl press
     static uint64_t ctrl_pressed_at = 0;
     static uint64_t last_tap_at = 0;  // 0: no tap pending
+    static uint64_t pulse_until = 0;
+    static uint32_t pulse_usage = 0;
 
     auto f24 = our_usages_flat.find(KEY_F24_USAGE);
     auto first_key = our_usages_flat.find(KEY_A_USAGE);
@@ -782,6 +787,8 @@ static void add_f24_to_keypresses() {
                 if ((last_tap_at != 0) && (now - last_tap_at < CTRL_DOUBLE_TAP_US)) {
                     f24_mode = !f24_mode;
                     last_tap_at = 0;
+                    pulse_usage = f24_mode ? KEY_F23_USAGE : KEY_F22_USAGE;
+                    pulse_until = now + TOGGLE_PULSE_US;
                 } else {
                     last_tap_at = now;
                 }
@@ -790,6 +797,10 @@ static void add_f24_to_keypresses() {
             }
         }
         ctrl_was_down = ctrl_down;
+    }
+
+    if (get_time() < pulse_until) {
+        put_bits(report, len, first_key->second.bitpos + (pulse_usage - KEY_A_USAGE), 1, 1);
     }
 
     if (!f24_mode || !any_key) {
