@@ -24,7 +24,16 @@ jobs:
           cd build
           cmake ../firmware
           make remapper
+          cd ..
+          mkdir build-feather
+          cd build-feather
+          PICO_BOARD=feather_host cmake ../firmware
+          make remapper
       - uses: actions/upload-artifact@v7
         with:
           name: remapper-pico
           path: build/remapper.uf2
+      - uses: actions/upload-artifact@v7
+        with:
+          name: remapper-feather-v3-v4
+          path: build-feather/remapper.uf2
